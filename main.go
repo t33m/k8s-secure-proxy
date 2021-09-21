@@ -2,37 +2,76 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"flag"
 	"fmt"
 	"io/ioutil"
+	"net/url"
 	"os"
 
+	"go.uber.org/zap"
+
+	logger "github.com/t33m/k8s-secure-proxy/pkg/logger/zap"
 	"github.com/t33m/k8s-secure-proxy/pkg/proxy"
 )
 
-
-
 func runProxy(listen, apiEndpoint, keyPath, certPath, caCertPath string) error {
-	caCert, err := ioutil.ReadFile(caCertPath)
+	caPool, err := x509.SystemCertPool()
+	if err != nil {
+		return err
+	}
+	if caCertPath != "" {
+		caCert, err := ioutil.ReadFile(caCertPath)
+		if err != nil {
+			return err
+		}
+		caPool.AppendCertsFromPEM(caCert)
+	}
+
+	keyBytes, err := ioutil.ReadFile(keyPath)
 	if err != nil {
 		return err
 	}
 
-	caPool := x509.NewCertPool()
-	caPool.AppendCertsFromPEM(caCert)
-
-	key, err := ioutil.ReadFile(keyPath)
+	certBytes, err := ioutil.ReadFile(certPath)
 	if err != nil {
 		return err
 	}
 
-	cert, err := ioutil.ReadFile(certPath)
+	cert, err := tls.X509KeyPair(certBytes, keyBytes)
 	if err != nil {
 		return err
 	}
 
-	p, err := proxy.NewProxy(listen, apiEndpoint, caPool, key, cert, proxy.DefaultPathRejectRE)
+	target := proxy.TargetMap{}
+	if target[listen], err = url.Parse(apiEndpoint); err != nil {
+		return err
+	}
+
+	zapLogger, err := zap.NewProduction()
+	if err != nil {
+		return err
+	}
+	log := logger.New(zapLogger.Sugar())
+
+	filterTransport, err := proxy.NewFilterTransport(
+		proxy.DefaultPathRejectRE, proxy.DefaultPathAcceptRE, &tls.Config{
+			MinVersion: tls.VersionTLS13,
+			RootCAs:    caPool,
+		},
+	)
+	if err != nil {
+		return err
+	}
+
+	tr := proxy.NewLoggingTransport(proxy.NewTargetTransport(filterTransport, target), log)
+
+	p, err := proxy.NewWithTLS(
+		listen, tr, &tls.Config{
+			Certificates: []tls.Certificate{cert},
+		},
+	)
 	if err != nil {
 		return err
 	}
@@ -40,17 +79,35 @@ func runProxy(listen, apiEndpoint, keyPath, certPath, caCertPath string) error {
 		_ = p.Shutdown(context.Background())
 	}()
 
-	return p.ListenAndServe()
+	done := make(chan struct{}, 1)
+	go func() {
+		_ = p.ListenAndServeTLS()
+		close(done)
+	}()
+
+	log.Info("listening...", "endpoint", "https://"+listen)
+
+	<-done
+	return nil
 }
 
 func main() {
-	apiEndpoint := flag.String( "api-endpoint", "", "endpoint of k8s api node")
-	caCertPath := flag.String( "ca", "", "path to CA certificate for verify k8s api node")
-	listen := flag.String( "listen", "127.0.0.1:8443", "proxy listen address")
-	keyPath := flag.String( "key", "", "path to key for proxy listener")
-	certPath := flag.String( "cert", "", "path to certificate for proxy listener")
+	flag.Usage = func() {
+		_, _  = fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
+		flag.PrintDefaults()
+	}
 
-	if err := runProxy(*listen, *apiEndpoint, *keyPath, *certPath, *caCertPath); err != nil {
+	var apiEndpoint, caCertPath, listen, keyPath, certPath string
+
+	flag.StringVar(&apiEndpoint, "api-endpoint", "", "endpoint of k8s api node")
+	flag.StringVar(&caCertPath, "ca", "", "path to CA certificate for verify k8s api node")
+	flag.StringVar(&listen, "listen", "127.0.0.1:8443", "proxy listen address")
+	flag.StringVar(&keyPath, "key", "", "path to key for proxy listener")
+	flag.StringVar(&certPath, "cert", "", "path to certificate for proxy listener")
+
+	flag.Parse()
+
+	if err := runProxy(listen, apiEndpoint, keyPath, certPath, caCertPath); err != nil {
 		_ , _ = fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
