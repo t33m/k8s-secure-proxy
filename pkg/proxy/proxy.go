@@ -11,7 +11,7 @@ import (
 	"k8s.io/client-go/kubernetes/scheme"
 )
 
-const secureProxyHeader = "x-k8s-secure-proxy-id"
+const secureProxyHeaderReqID = "x-k8s-secure-proxy-request-id"
 
 var (
 	corev1GV    = schema.GroupVersion{Version: "v1"}
@@ -37,7 +37,7 @@ func New(listen string, tr http.RoundTripper) (*Proxy, error) {
 func newProxyHandler(tr http.RoundTripper) http.Handler {
 	handler := &httputil.ReverseProxy{
 		Director: func(req *http.Request) {
-			req.Header.Set(secureProxyHeader, uuid.New().String())
+			req.Header.Set(secureProxyHeaderReqID, uuid.New().String())
 		},
 		Transport: tr,
 	}

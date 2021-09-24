@@ -140,6 +140,9 @@ func (t *LoggingTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 		"method", req.Method,
 		"path", req.URL.EscapedPath(),
 	}
+	if reqID := req.Header.Get(secureProxyHeaderReqID); reqID != "" {
+		args = append(args, secureProxyHeaderReqID, reqID)
+	}
 	resp, err := t.inner.RoundTrip(req)
 	if resp != nil {
 		args = append(args, "status_code", resp.StatusCode)
