@@ -33,7 +33,7 @@ func TestProxy(t *testing.T) {
 	target.url, err = url.Parse(targetServer.URL)
 	require.NoError(t, err)
 
-	proxy := httptest.NewServer(newProxyHandler(NewTargetTransport(tr, target)))
+	proxy := httptest.NewServer(NewProxyHandler(NewTargetTransport(tr, target)))
 
 	tests := []struct{
 		name               string

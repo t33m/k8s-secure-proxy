@@ -3,6 +3,8 @@ package proxy
 import (
 	"context"
 	"crypto/tls"
+	"io/ioutil"
+	"log"
 	"net/http"
 	"net/http/httputil"
 
@@ -28,13 +30,14 @@ type Proxy struct {
 func New(listen string, tr http.RoundTripper) (*Proxy, error) {
 	return &Proxy{
 		server: &http.Server{
-			Addr: listen,
-			Handler: newProxyHandler(tr),
+			Addr:     listen,
+			Handler:  NewProxyHandler(tr),
+			ErrorLog: log.New(ioutil.Discard, "", 0),
 		},
 	}, nil
 }
 
-func newProxyHandler(tr http.RoundTripper) http.Handler {
+func NewProxyHandler(tr http.RoundTripper) http.Handler {
 	handler := &httputil.ReverseProxy{
 		Director: func(req *http.Request) {
 			req.Header.Set(secureProxyHeaderReqID, uuid.New().String())
