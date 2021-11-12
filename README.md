@@ -5,7 +5,7 @@
 Simple proxy for k8s API.
 
 features:
- - paths filtering
+ - path filtering
  - request logging
  - multiple backends support
 
