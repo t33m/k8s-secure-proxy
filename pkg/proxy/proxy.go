@@ -1,10 +1,6 @@
 package proxy
 
 import (
-	"context"
-	"crypto/tls"
-	"io/ioutil"
-	"log"
 	"net/http"
 	"net/http/httputil"
 
@@ -23,20 +19,6 @@ var (
 	)
 )
 
-type Proxy struct {
-	server *http.Server
-}
-
-func New(listen string, tr http.RoundTripper) (*Proxy, error) {
-	return &Proxy{
-		server: &http.Server{
-			Addr:     listen,
-			Handler:  NewProxyHandler(tr),
-			ErrorLog: log.New(ioutil.Discard, "", 0),
-		},
-	}, nil
-}
-
 func NewProxyHandler(tr http.RoundTripper) http.Handler {
 	handler := &httputil.ReverseProxy{
 		Director: func(req *http.Request) {
@@ -49,27 +31,6 @@ func NewProxyHandler(tr http.RoundTripper) http.Handler {
 	mux.HandleFunc("/", requestHandler(handler))
 
 	return mux
-}
-
-func NewWithTLS(listen string, filterTransport http.RoundTripper, tlsConfig *tls.Config) (*Proxy, error) {
-	proxy, err := New(listen, filterTransport)
-	if err != nil {
-		return nil, err
-	}
-	proxy.server.TLSConfig = tlsConfig
-	return proxy, nil
-}
-
-func (p *Proxy) ListenAndServe() error {
-	return p.server.ListenAndServe()
-}
-
-func (p *Proxy) ListenAndServeTLS() error {
-	return p.server.ListenAndServeTLS("", "")
-}
-
-func (p *Proxy) Shutdown(ctx context.Context) error {
-	return p.server.Shutdown(ctx)
 }
 
 func requestHandler(proxy http.Handler) func(http.ResponseWriter, *http.Request) {
