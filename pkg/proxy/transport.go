@@ -6,11 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
 
-	"github.com/t33m/k8s-secure-proxy/pkg/logger"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/kubectl/pkg/proxy"
@@ -97,59 +97,35 @@ func forbiddenResponse(req *http.Request, reason string) (*http.Response, error)
 	}, nil
 }
 
-type Target interface {
+type Backend interface {
 	Get(string) *url.URL
 }
 
-type TargetMap map[string]*url.URL
+type VirtualHosts map[string]*url.URL
 
-func(m TargetMap) Get(host string) *url.URL {
-	return m[host]
+func(h VirtualHosts) Get(host string) *url.URL {
+	return h[host]
 }
 
-type TargetTransport struct {
-	inner  http.RoundTripper
-	target Target
+type BackendTransport struct {
+	inner   http.RoundTripper
+	backend Backend
 }
 
-func NewTargetTransport(inner http.RoundTripper, target Target) *TargetTransport {
-	return &TargetTransport{inner: inner, target: target}
+func NewBackendTransport(inner http.RoundTripper, backend Backend) *BackendTransport {
+	return &BackendTransport{inner: inner, backend: backend}
 }
 
-func (t *TargetTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	targetUrl := t.target.Get(req.Host)
-	if targetUrl == nil {
-		return nil, fmt.Errorf("not found target for %s", req.Host)
-	}
-	req.URL.Scheme = targetUrl.Scheme
-	req.URL.Host = targetUrl.Host
-	return t.inner.RoundTrip(req)
-}
-
-type LoggingTransport struct {
-	inner  http.RoundTripper
-	logger logger.Logger
-}
-
-func NewLoggingTransport(tr http.RoundTripper, logger logger.Logger) *LoggingTransport {
-	return &LoggingTransport{inner: tr, logger: logger}
-}
-
-func (t *LoggingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	args := []interface{}{
-		"method", req.Method,
-		"path", req.URL.EscapedPath(),
-	}
-	if reqID := req.Header.Get(secureProxyHeaderReqID); reqID != "" {
-		args = append(args, secureProxyHeaderReqID, reqID)
-	}
-	resp, err := t.inner.RoundTrip(req)
-	if resp != nil {
-		args = append(args, "status_code", resp.StatusCode)
-	}
+func (t *BackendTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	host, _, err := net.SplitHostPort(req.Host)
 	if err != nil {
-		args = append(args, "err", err)
+		return nil, fmt.Errorf("can't parse HOST header %s: %v", req.Host, err)
 	}
-	t.logger.Info("request", args...)
-	return resp, err
+	backendUrl := t.backend.Get(host)
+	if backendUrl == nil {
+		return nil, fmt.Errorf("not found backend for %s", host)
+	}
+	req.URL.Scheme = backendUrl.Scheme
+	req.URL.Host = backendUrl.Host
+	return t.inner.RoundTrip(req)
 }

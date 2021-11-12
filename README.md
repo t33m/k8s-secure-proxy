@@ -7,7 +7,7 @@ Simple proxy for k8s API.
 features:
  - paths filtering
  - request logging
- - multiple target hosts support
+ - multiple backends support
 
 example usage
 ```go
@@ -20,16 +20,26 @@ import (
 	"flag"
 	"fmt"
 	"io/ioutil"
+	"log"
+	"net/http"
 	"net/url"
 	"os"
 
-	"go.uber.org/zap"
-
-	logger "github.com/t33m/k8s-secure-proxy/pkg/logger/zap"
 	"github.com/t33m/k8s-secure-proxy/pkg/proxy"
 )
 
-func runProxy(listen, apiEndpoint, keyPath, certPath, caCertPath string) error {
+func loggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		log.Printf(
+			"client-ip: %s, user-agent: %s, host: %s, method: %s, path: %s",
+			req.RemoteAddr, req.UserAgent(), req.Host, req.Method, req.URL.Path,
+		)
+		next.ServeHTTP(w, req)
+	})
+}
+
+
+func runProxy(listen, virtualHost, apiEndpoint, caCertPath, keyPath, certPath string) error {
 	caPool, err := x509.SystemCertPool()
 	if err != nil {
 		return err
@@ -57,16 +67,10 @@ func runProxy(listen, apiEndpoint, keyPath, certPath, caCertPath string) error {
 		return err
 	}
 
-	target := proxy.TargetMap{}
-	if target[listen], err = url.Parse(apiEndpoint); err != nil {
+	vHosts := proxy.VirtualHosts{}
+	if vHosts[virtualHost], err = url.Parse(apiEndpoint); err != nil {
 		return err
 	}
-
-	zapLogger, err := zap.NewProduction()
-	if err != nil {
-		return err
-	}
-	log := logger.New(zapLogger.Sugar())
 
 	filterTransport, err := proxy.NewFilterTransport(
 		proxy.DefaultPathRejectRE, proxy.DefaultPathAcceptRE, &tls.Config{
@@ -78,27 +82,26 @@ func runProxy(listen, apiEndpoint, keyPath, certPath, caCertPath string) error {
 		return err
 	}
 
-	tr := proxy.NewLoggingTransport(proxy.NewTargetTransport(filterTransport, target), log)
+	tr := proxy.NewBackendTransport(filterTransport, vHosts)
+	server := &http.Server{
+		Addr:     listen,
+		Handler:  loggingMiddleware(proxy.NewProxyHandler(tr)),
+	}
 
-	p, err := proxy.NewWithTLS(
-		listen, tr, &tls.Config{
-			Certificates: []tls.Certificate{cert},
-		},
-	)
-	if err != nil {
-		return err
+	server.TLSConfig = &tls.Config{
+		Certificates: []tls.Certificate{cert},
 	}
 	defer func(){
-		_ = p.Shutdown(context.Background())
+		_ = server.Shutdown(context.Background())
 	}()
 
 	done := make(chan struct{}, 1)
 	go func() {
-		_ = p.ListenAndServeTLS()
+		_ = server.ListenAndServeTLS("", "")
 		close(done)
 	}()
 
-	log.Info("listening...", "endpoint", "https://"+listen)
+	log.Printf("listening on %s", listen)
 
 	<-done
 	return nil
@@ -110,17 +113,18 @@ func main() {
 		flag.PrintDefaults()
 	}
 
-	var apiEndpoint, caCertPath, listen, keyPath, certPath string
+	var listen, virtualHost, apiEndpoint, caCertPath, keyPath, certPath string
 
+	flag.StringVar(&listen, "listen", "127.0.0.1:8443", "proxy listen address")
+	flag.StringVar(&virtualHost, "virtual-host", "127.0.0.1", "virtual host")
 	flag.StringVar(&apiEndpoint, "api-endpoint", "", "endpoint of k8s api node")
 	flag.StringVar(&caCertPath, "ca", "", "path to CA certificate for verify k8s api node")
-	flag.StringVar(&listen, "listen", "127.0.0.1:8443", "proxy listen address")
 	flag.StringVar(&keyPath, "key", "", "path to key for proxy listener")
 	flag.StringVar(&certPath, "cert", "", "path to certificate for proxy listener")
 
 	flag.Parse()
 
-	if err := runProxy(listen, apiEndpoint, keyPath, certPath, caCertPath); err != nil {
+	if err := runProxy(listen, virtualHost, apiEndpoint, caCertPath, keyPath, certPath); err != nil {
 		_ , _ = fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

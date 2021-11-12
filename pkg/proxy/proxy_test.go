@@ -12,12 +12,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type target struct {
+type backend struct {
 	url *url.URL
 }
 
-func (t target) Get(string) *url.URL {
-	return t.url
+func (b backend) Get(string) *url.URL {
+	return b.url
 }
 
 func TestProxy(t *testing.T) {
@@ -28,12 +28,12 @@ func TestProxy(t *testing.T) {
 	mux.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
 		_, _ = fmt.Fprintf(w, "ok\n")
 	})
-	targetServer := httptest.NewServer(mux)
-	target := target{}
-	target.url, err = url.Parse(targetServer.URL)
+	backendServer := httptest.NewServer(mux)
+	b := backend{}
+	b.url, err = url.Parse(backendServer.URL)
 	require.NoError(t, err)
 
-	proxy := httptest.NewServer(NewProxyHandler(NewTargetTransport(tr, target)))
+	proxy := httptest.NewServer(NewProxyHandler(NewBackendTransport(tr, b)))
 
 	tests := []struct{
 		name               string
