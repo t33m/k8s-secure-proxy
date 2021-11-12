@@ -6,10 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"regexp"
+	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -117,10 +117,11 @@ func NewBackendTransport(inner http.RoundTripper, backend Backend) *BackendTrans
 }
 
 func (t *BackendTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	host, _, err := net.SplitHostPort(req.Host)
-	if err != nil {
-		return nil, fmt.Errorf("can't parse HOST header %s: %v", req.Host, err)
+	splitted := strings.Split(req.Host, ":")
+	if len(splitted) == 0 {
+		return nil, fmt.Errorf("can't parse HOST header %s", req.Host)
 	}
+	host := splitted[0]
 	backendUrl := t.backend.Get(host)
 	if backendUrl == nil {
 		return nil, fmt.Errorf("not found backend for %s", host)
